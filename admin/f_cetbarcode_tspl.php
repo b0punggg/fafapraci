@@ -4,27 +4,71 @@ include 'config.php';
 $id_user = $_SESSION['id_user'];
 $concet  = opendtcek();
 
-$cek = mysqli_query($concet, "SELECT kd_bar, copy, no_urut FROM mas_brg WHERE pilih='1' AND id_user='".mysqli_real_escape_string($concet,$id_user)."'");
-
-// Kumpulkan semua label (sesuai jumlah copy)
-$labels = [];
-while ($d = mysqli_fetch_assoc($cek)) {
-    for ($z = 0; $z < (int)$d['copy']; $z++) { $labels[] = $d['kd_bar']; }
-    mysqli_query($concet, "UPDATE mas_brg SET cetak='1' WHERE no_urut='".(int)$d['no_urut']."'");
+function tspl_esc($s)
+{
+    return str_replace(array('\\', '"', "\r", "\n"), '', (string) $s);
 }
 
-// Susun TSPL: 1 baris = 2 label
-$tspl  = "SIZE 70 mm,15 mm\r\nGAP 3 mm,0\r\nDIRECTION 1\r\nREFERENCE 0,0\r\nDENSITY 10\r\nSPEED 3\r\n";
-$tspl .= "AUTODETECT\r\n";
+function tspl_label($ox, $nm, $bar, $harga)
+{
+    $nm    = tspl_esc(function_exists('mb_substr') ? mb_substr($nm, 0, 16, 'UTF-8') : substr($nm, 0, 16));
+    $bar   = tspl_esc($bar);
+    $harga = tspl_esc($harga);
+
+    $xL   = $ox + 32;
+    $xBar = $ox + 56;
+    $hBar = 48;
+    $yNm  = 16;
+    $yHr  = 28;
+    $yBar = 42;
+    $xh   = $ox + 228 - (strlen($harga) * 8);
+    if ($xh < $xL + 80) {
+        $xh = $xL + 80;
+    }
+
+    $cmd  = 'TEXT '.$xL.','.$yNm.',"1",0,1,1,"'.$nm."\"\r\n";
+    $cmd .= 'TEXT '.$xh.','.$yHr.',"1",0,1,1,"'.$harga."\"\r\n";
+    $cmd .= 'BARCODE '.$xBar.','.$yBar.',"128",'.$hBar.',0,0,1,2,"'.$bar."\"\r\n";
+    return $cmd;
+}
+
+$uid = mysqli_real_escape_string($concet, $id_user);
+$cek = mysqli_query($concet, "SELECT kd_bar, nm_brg, hrg_jum1, copy, no_urut FROM mas_brg WHERE pilih='1' AND id_user='".$uid."'");
+
+$labels = array();
+while ($d = mysqli_fetch_assoc($cek)) {
+    $item = array(
+        'nm'    => $d['nm_brg'],
+        'bar'   => (string) $d['kd_bar'],
+        'harga' => 'Rp '.number_format((int) round($d['hrg_jum1']), 0, ',', '.'),
+    );
+    $copies = max(1, (int) $d['copy']);
+    for ($z = 0; $z < $copies; $z++) {
+        $labels[] = $item;
+    }
+    mysqli_query($concet, "UPDATE mas_brg SET cetak='1' WHERE no_urut='".(int) $d['no_urut']."'");
+}
+
+$tspl  = "SIZE 70 mm,15 mm\r\n";
+$tspl .= "GAP 3 mm,0\r\n";
+$tspl .= "OFFSET 0 mm\r\n";
+$tspl .= "DIRECTION 1\r\n";
+$tspl .= "REFERENCE 0,0\r\n";
+$tspl .= "DENSITY 12\r\n";
+$tspl .= "SPEED 3\r\n";
+
 for ($i = 0; $i < count($labels); $i += 2) {
     $tspl .= "CLS\r\n";
-    $tspl .= 'BARCODE 30,4,"128",55,1,0,2,2,"'.$labels[$i]."\"\r\n";
-    if (isset($labels[$i+1])) {
-        $tspl .= 'BARCODE 318,4,"128",55,1,0,2,2,"'.$labels[$i+1]."\"\r\n";
+    $tspl .= tspl_label(0, $labels[$i]['nm'], $labels[$i]['bar'], $labels[$i]['harga']);
+    if (isset($labels[$i + 1])) {
+        $tspl .= tspl_label(288, $labels[$i + 1]['nm'], $labels[$i + 1]['bar'], $labels[$i + 1]['harga']);
     }
     $tspl .= "PRINT 1,1\r\n";
 }
 
 mysqli_close($concet);
 header('Content-Type: application/json');
-echo json_encode(['tspl' => $tspl, 'jumlah' => count($labels)]);
+echo json_encode(array(
+    'tspl'   => $tspl,
+    'jumlah' => count($labels),
+));
